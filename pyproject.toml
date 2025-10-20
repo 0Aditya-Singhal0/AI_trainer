@@ -1,0 +1,15 @@
+[project]
+name = "fitness-ai-trainer-with-automatic-exercise-recognition-and-counting"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi[standard]>=0.119.0",
+    "mediapipe>=0.10.21",
+    "opencv-python>=4.11.0.86",
+    "pandas>=2.3.3",
+    "scikit-learn>=1.7.2",
+    "tensorflow>=2.18.1",
+    "tensorflow-io-gcs-filesystem==0.31.0",
+]
