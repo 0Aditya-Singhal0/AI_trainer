@@ -100,7 +100,7 @@ class FormAnalysisService:
                     except Exception as e:
                         logger.error(f"Error loading reference {file_path}: {str(e)}")
     
-    def analyze_video_form(self, video_file_path: str) -> Dict[str, Any]:
+    def analyze_video_form(self, video_file_path: str, auto_detect: bool = True, specified_exercise: str = None) -> Dict[str, Any]:
         """Analyze form from video file"""
         start_time = time.time()
         
@@ -117,85 +117,145 @@ class FormAnalysisService:
             current_prediction = "unknown"
             all_form_feedbacks = []
             
-            # Process all frames to get comprehensive analysis
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                    
-                # If we have reference models, use the new analysis method
-                if self.form_analyzer.references:
-                    # Analyze form against reference models
-                    for exercise_type in self.form_analyzer.references.keys():
-                        form_analysis = self.form_analyzer.analyze_form(frame, exercise_type)
-                        
-                        # If we find a good match based on form score or confidence
-                        if form_analysis.get('form_score', 0) > 70:  # Threshold for considering this exercise
-                            current_prediction = exercise_type
-                            all_form_feedbacks.append(form_analysis)
-                            break  # Break to avoid analyzing for other exercise types
-                        elif not all_form_feedbacks:
-                            all_form_feedbacks.append(form_analysis)
+            if not auto_detect and specified_exercise:
+                # User specified exercise - analyze form for that specific exercise
+                total_frames = 0
+                total_score = 0
+                all_detected_errors = []
                 
-                # Fallback to old method if no reference models
-                else:
-                    landmarks = self.pose_analyzer.preprocess_frame(frame)
-                    if len(landmarks) == len(self.pose_analyzer.RELEVANT_LANDMARKS_INDICES) * 3:
-                        features = self.pose_analyzer.extract_features(landmarks)
-                        if len(features) == 22:
-                            landmarks_window.append(features)
-                            frame_count += 1
-                            
-                            # Process window when we have enough frames
-                            if len(landmarks_window) == window_size:
-                                # Use the model to predict exercise type
-                                if self.lstm_model is not None and self.scaler is not None:
-                                    landmarks_window_np = np.array(landmarks_window).flatten().reshape(1, -1)
-                                    scaled_landmarks_window = self.scaler.transform(landmarks_window_np)
-                                    scaled_landmarks_window = scaled_landmarks_window.reshape(1, window_size, 22)
-
-                                    prediction = self.lstm_model.predict(scaled_landmarks_window)
-                                    predicted_class = np.argmax(prediction, axis=1)[0]
-                                    
-                                    if predicted_class < len(self.exercise_classes):
-                                        current_prediction = self.exercise_classes[predicted_class]
+                while cap.isOpened():
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    
+                    # Analyze form against the specified exercise
+                    form_analysis = self.form_analyzer.analyze_form(frame, specified_exercise)
+                    
+                    if form_analysis and 'form_score' in form_analysis:
+                        all_form_feedbacks.append(form_analysis)
+                        total_score += form_analysis['form_score']
+                        total_frames += 1
+                        
+                        # Collect all detected errors
+                        if 'detected_errors' in form_analysis and form_analysis['detected_errors']:
+                            all_detected_errors.extend(form_analysis['detected_errors'])
+            
+            else:
+                # Auto-detection mode - use the original logic
+                while cap.isOpened():
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                        
+                        # If we have reference models, use the new analysis method
+                        if self.form_analyzer.references:
+                            # Analyze form against reference models
+                            for exercise_type in self.form_analyzer.references.keys():
+                                form_analysis = self.form_analyzer.analyze_form(frame, exercise_type)
                                 
-                                # Clear window
-                                landmarks_window = []
+                                # If we find a good match based on form score or confidence
+                                if form_analysis.get('form_score', 0) > 70:  # Threshold for considering this exercise
+                                    current_prediction = exercise_type
+                                    all_form_feedbacks.append(form_analysis)
+                                    break  # Break to avoid analyzing for other exercise types
+                                elif not all_form_feedbacks:
+                                    all_form_feedbacks.append(form_analysis)
+                        # Fallback to old method if no reference models
+                        else:
+                            landmarks = self.pose_analyzer.preprocess_frame(frame)
+                            if len(landmarks) == len(self.pose_analyzer.RELEVANT_LANDMARKS_INDICES) * 3:
+                                features = self.pose_analyzer.extract_features(landmarks)
+                                if len(features) == 22:
+                                    landmarks_window.append(features)
+                                    frame_count += 1
+                                    
+                                    # Process window when we have enough frames
+                                    if len(landmarks_window) == window_size:
+                                        # Use the model to predict exercise type
+                                        if self.lstm_model is not None and self.scaler is not None:
+                                            landmarks_window_np = np.array(landmarks_window).flatten().reshape(1, -1)
+                                            scaled_landmarks_window = self.scaler.transform(landmarks_window_np)
+                                            scaled_landmarks_window = scaled_landmarks_window.reshape(1, window_size, 22)
+
+                                            prediction = self.lstm_model.predict(scaled_landmarks_window)
+                                            predicted_class = np.argmax(prediction, axis=1)[0]
+                                            
+                                            if predicted_class < len(self.exercise_classes):
+                                                current_prediction = self.exercise_classes[predicted_class]
+                                        
+                                        # Clear window
+                                        landmarks_window = []
             
             cap.release()
             
             # Prepare response based on analysis method used
-            if all_form_feedbacks:
-                # Use the best scoring analysis
-                best_feedback = max(all_form_feedbacks, key=lambda x: x.get('form_score', 0))
-                
-                # Convert to compatible format
-                detected_errors = []
-                for error in best_feedback.get('detected_errors', []):
-                    detected_errors.append({
-                        "error_type": error.get('feature', 'unknown'),
-                        "confidence": min(1.0, error.get('deviation', 1.0) / 10.0),  # Normalize deviation to confidence
-                        "message": error.get('message', 'Form error detected'),
-                        "severity": "high" if error.get('deviation', 0) > 3.0 else "medium" if error.get('deviation', 0) > 2.0 else "low"
-                    })
-                
-                form_feedback = {
-                    "timestamp": get_timestamp(),
-                    "exercise_type": best_feedback.get('exercise_type', 'unknown'),
-                    "detected_errors": detected_errors,
-                    "overall_score": best_feedback.get('form_score', 0.0),
-                    "recommendations": best_feedback.get('recommendations', [])
-                }
+            if auto_detect or (not auto_detect and not all_form_feedbacks):
+                # For auto-detection or if user-specified exercise didn't return results
+                if all_form_feedbacks:
+                    # Use the best scoring analysis
+                    best_feedback = max(all_form_feedbacks, key=lambda x: x.get('form_score', 0))
+                    
+                    # Convert to compatible format
+                    detected_errors = []
+                    for error in best_feedback.get('detected_errors', []):
+                        detected_errors.append({
+                            "error_type": error.get('feature', 'unknown'),
+                            "confidence": min(1.0, error.get('deviation', 1.0) / 10.0),  # Normalize deviation to confidence
+                            "message": error.get('message', 'Form error detected'),
+                            "severity": "high" if error.get('deviation', 0) > 3.0 else "medium" if error.get('deviation', 0) > 2.0 else "low"
+                        })
+                    
+                    form_feedback = {
+                        "timestamp": get_timestamp(),
+                        "exercise_type": best_feedback.get('exercise_type', 'unknown'),
+                        "detected_errors": detected_errors,
+                        "overall_score": best_feedback.get('form_score', 0.0),
+                        "recommendations": best_feedback.get('recommendations', [])
+                    }
+                else:
+                    # Fallback to old method if no landmarks detected
+                    form_feedback = {
+                        "timestamp": get_timestamp(),
+                        "exercise_type": current_prediction,
+                        "detected_errors": [],
+                        "overall_score": 0.0,
+                        "recommendations": ["Could not detect body landmarks. Please ensure you are clearly visible in the frame."]
+                    }
             else:
-                # Fallback to old method if no landmarks detected
-                form_feedback = {
-                    "timestamp": get_timestamp(),
-                    "exercise_type": current_prediction,
-                    "detected_errors": [],
-                    "overall_score": 0.0,
-                    "recommendations": ["Could not detect body landmarks. Please ensure you are clearly visible in the frame."]
-                }
+                # For user-specified exercise mode
+                if all_form_feedbacks:
+                    # Average the scores and combine errors
+                    avg_score = total_score / total_frames if total_frames > 0 else 0
+                    unique_errors = {}
+                    
+                    for error in all_detected_errors:
+                        # Use error message as key to avoid duplicates
+                        error_key = error.get('message', 'unknown_error')
+                        if error_key not in unique_errors:
+                            unique_errors[error_key] = {
+                                "error_type": error.get('feature', 'unknown'),
+                                "confidence": min(1.0, error.get('deviation', 1.0) / 10.0),
+                                "message": error.get('message', 'Form error detected'),
+                                "severity": "high" if error.get('deviation', 0) > 3.0 else "medium" if error.get('deviation', 0) > 2.0 else "low"
+                            }
+                    
+                    detected_errors = list(unique_errors.values())
+                    
+                    form_feedback = {
+                        "timestamp": get_timestamp(),
+                        "exercise_type": specified_exercise,
+                        "detected_errors": detected_errors,
+                        "overall_score": avg_score,
+                        "recommendations": ["Exercise analysis completed based on user-specified exercise type."]
+                    }
+                else:
+                    form_feedback = {
+                        "timestamp": get_timestamp(),
+                        "exercise_type": specified_exercise,
+                        "detected_errors": [],
+                        "overall_score": 0.0,
+                        "recommendations": ["Could not analyze form. Please ensure you are clearly visible in the frame."]
+                    }
             
             processing_time = time.time() - start_time
             
@@ -209,7 +269,7 @@ class FormAnalysisService:
             logger.error(f"Error in analyze_video_form: {str(e)}")
             raise e
     
-    def analyze_image_form(self, image_file_path: str) -> Dict[str, Any]:
+    def analyze_image_form(self, image_file_path: str, auto_detect: bool = True, specified_exercise: str = None) -> Dict[str, Any]:
         """Analyze form from single image"""
         start_time = time.time()
         
@@ -220,25 +280,14 @@ class FormAnalysisService:
             if frame is None:
                 raise ValueError("Could not decode image file")
             
-            # If we have reference models, use the new analysis method
-            if self.form_analyzer.references:
-                # Analyze form against all reference models and pick the best match
-                best_analysis = None
-                best_score = 0
+            if not auto_detect and specified_exercise:
+                # User specified exercise - analyze form for that specific exercise
+                form_analysis = self.form_analyzer.analyze_form(frame, specified_exercise)
                 
-                for exercise_type in self.form_analyzer.references.keys():
-                    form_analysis = self.form_analyzer.analyze_form(frame, exercise_type)
-                    score = form_analysis.get('form_score', 0)
-                    
-                    if score > best_score:
-                        best_score = score
-                        best_analysis = form_analysis
-                
-                # If we have a good match
-                if best_analysis and best_score > 30:  # Threshold for considering valid
+                if form_analysis and 'form_score' in form_analysis:
                     # Convert to compatible format
                     detected_errors = []
-                    for error in best_analysis.get('detected_errors', []):
+                    for error in form_analysis.get('detected_errors', []):
                         detected_errors.append({
                             "error_type": error.get('feature', 'unknown'),
                             "confidence": min(1.0, error.get('deviation', 1.0) / 10.0),  # Normalize deviation to confidence
@@ -248,53 +297,97 @@ class FormAnalysisService:
                     
                     form_feedback = {
                         "timestamp": get_timestamp(),
-                        "exercise_type": best_analysis.get('exercise_type', 'unknown'),
+                        "exercise_type": specified_exercise,
                         "detected_errors": detected_errors,
-                        "overall_score": best_analysis.get('form_score', 0.0),
-                        "recommendations": best_analysis.get('recommendations', [])
+                        "overall_score": form_analysis.get('form_score', 0.0),
+                        "recommendations": form_analysis.get('recommendations', [])
                     }
                 else:
-                    # If no good match found, try to predict exercise type
-                    landmarks = self.pose_analyzer.preprocess_frame(frame)
-                    predicted_exercise = self.pose_analyzer.predict_exercise_from_landmarks(landmarks) if len(landmarks) == len(self.pose_analyzer.RELEVANT_LANDMARKS_INDICES) * 3 else "unknown"
-                    
                     form_feedback = {
                         "timestamp": get_timestamp(),
-                        "exercise_type": predicted_exercise,
+                        "exercise_type": specified_exercise,
                         "detected_errors": [],
                         "overall_score": 0.0,
-                        "recommendations": ["Could not match form to reference models. Please try a different exercise or check lighting conditions."]
+                        "recommendations": ["Could not analyze form for specified exercise. Please ensure you are clearly visible in the frame."]
                     }
             
             else:
-                # Fallback to old method if no reference models
-                landmarks = self.pose_analyzer.preprocess_frame(frame)
+                # Auto-detection mode - use the original logic
+                # If we have reference models, use the new analysis method
+                if self.form_analyzer.references:
+                    # Analyze form against all reference models and pick the best match
+                    best_analysis = None
+                    best_score = 0
+                    
+                    for exercise_type in self.form_analyzer.references.keys():
+                        form_analysis = self.form_analyzer.analyze_form(frame, exercise_type)
+                        score = form_analysis.get('form_score', 0)
+                        
+                        if score > best_score:
+                            best_score = score
+                            best_analysis = form_analysis
+                    
+                    # If we have a good match
+                    if best_analysis and best_score > 30:  # Threshold for considering valid
+                        # Convert to compatible format
+                        detected_errors = []
+                        for error in best_analysis.get('detected_errors', []):
+                            detected_errors.append({
+                                "error_type": error.get('feature', 'unknown'),
+                                "confidence": min(1.0, error.get('deviation', 1.0) / 10.0),  # Normalize deviation to confidence
+                                "message": error.get('message', 'Form error detected'),
+                                "severity": "high" if error.get('deviation', 0) > 3.0 else "medium" if error.get('deviation', 0) > 2.0 else "low"
+                            })
+                        
+                        form_feedback = {
+                            "timestamp": get_timestamp(),
+                            "exercise_type": best_analysis.get('exercise_type', 'unknown'),
+                            "detected_errors": detected_errors,
+                            "overall_score": best_analysis.get('form_score', 0.0),
+                            "recommendations": best_analysis.get('recommendations', [])
+                        }
+                    else:
+                        # If no good match found, try to predict exercise type
+                        landmarks = self.pose_analyzer.preprocess_frame(frame)
+                        predicted_exercise = self.pose_analyzer.predict_exercise_from_landmarks(landmarks) if len(landmarks) == len(self.pose_analyzer.RELEVANT_LANDMARKS_INDICES) * 3 else "unknown"
+                        
+                        form_feedback = {
+                            "timestamp": get_timestamp(),
+                            "exercise_type": predicted_exercise,
+                            "detected_errors": [],
+                            "overall_score": 0.0,
+                            "recommendations": ["Could not match form to reference models. Please try a different exercise or check lighting conditions."]
+                        }
                 
-                # Predict exercise type using landmarks
-                if len(landmarks) == len(self.pose_analyzer.RELEVANT_LANDMARKS_INDICES) * 3:
-                    # Simplified exercise classification based on landmark positions
-                    current_prediction = self.pose_analyzer.predict_exercise_from_landmarks(landmarks)
-                    
-                    detected_errors, recommendations, overall_score = self.pose_analyzer.analyze_exercise_form(
-                        landmarks, current_prediction
-                    )
-                    
-                    form_feedback = {
-                        "timestamp": get_timestamp(),
-                        "exercise_type": current_prediction,
-                        "detected_errors": detected_errors,
-                        "overall_score": overall_score,
-                        "recommendations": recommendations
-                    }
                 else:
-                    form_feedback = {
-                        "timestamp": get_timestamp(),
-                        "exercise_type": "unknown",
-                        "detected_errors": [],
-                        "overall_score": 0.0,
-                        "recommendations": ["Could not detect body landmarks. Please ensure you are clearly visible in the frame."]
-                    }
-            
+                    # Fallback to old method if no reference models
+                    landmarks = self.pose_analyzer.preprocess_frame(frame)
+                    
+                    # Predict exercise type using landmarks
+                    if len(landmarks) == len(self.pose_analyzer.RELEVANT_LANDMARKS_INDICES) * 3:
+                        # Simplified exercise classification based on landmark positions
+                        current_prediction = self.pose_analyzer.predict_exercise_from_landmarks(landmarks)
+                        
+                        detected_errors, recommendations, overall_score = self.pose_analyzer.analyze_exercise_form(
+                            landmarks, current_prediction
+                        )
+                        
+                        form_feedback = {
+                            "timestamp": get_timestamp(),
+                            "exercise_type": current_prediction,
+                            "detected_errors": detected_errors,
+                            "overall_score": overall_score,
+                            "recommendations": recommendations
+                        }
+                    else:
+                        form_feedback = {
+                            "timestamp": get_timestamp(),
+                            "exercise_type": "unknown",
+                            "detected_errors": [],
+                            "overall_score": 0.0,
+                            "recommendations": ["Could not detect body landmarks. Please ensure you are clearly visible in the frame."]
+                        }
+        
             processing_time = time.time() - start_time
             
             return {
