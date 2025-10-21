@@ -133,7 +133,7 @@ The system analyzes multiple biomechanical features:
 
 ### Prerequisites
 - Python 3.10+
-- Required dependencies (see requirements.txt)
+- Required dependencies (see pyproject.toml)
 
 ### Local Setup
 
@@ -188,30 +188,48 @@ or
 python main.py
 ```
 
-The API will be available at `http://localhost:8000` with api docs @ `/docs`
+The API will be available at `http://localhost:8000` with API documentation at `/docs`
 
 ### Docker Setup
 
-1. **Build the Docker image:**
+The application includes containerization support for easy deployment and scaling.
+
+**Docker Components:**
+- **backend/Dockerfile**: Multi-stage build configuration for the FastAPI backend using uv for fast dependency installation
+- **docker-compose.yml**: Multi-service orchestration (API, models, etc.) - builds from backend directory 
+- **backend/.dockerignore**: Specifies files and directories to exclude from Docker builds
+
+**Build and Run with Docker:**
+
+1. **Build the Docker image (from backend directory):**
 ```bash
+cd backend
 docker build -t genyx-fitness-backend .
 ```
 
 2. **Run the container:**
 ```bash
-docker run -p 8000:8000 -v $(pwd)/models:/app/models genyx-fitness-backend
+docker run -p 8000:8000 -v ../models:/app/models genyx-fitness-backend
 ```
 
-Or use docker-compose:
+**Using Docker Compose (from root directory):**
 ```bash
 docker-compose up
 ```
+
+**Docker Configuration:**
+The `backend/.dockerignore` file ensures only necessary files are included in the Docker image:
+- Includes only the backend folder and models directory
+- Excludes ai_utils/, data/, video files (.mp4, .mov, etc.) and other unnecessary files
+- Uses uv for fast dependency installation via `uv sync`
+- Optimizes build context for faster builds
 
 ### Testing the API
 
 Verify the API is running by accessing:
 - Health check: `GET http://localhost:8000/health`
 - Model info: `GET http://localhost:8000/model-info`
+- API Documentation: `GET http://localhost:8000/docs`
 
 ## Original Repository Credit
 

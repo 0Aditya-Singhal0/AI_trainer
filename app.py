@@ -12,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-def analyze_form_with_user_exercise(video_file, exercise_type: str) -> Dict[str, Any]:
+def analyze_form_with_user_exercise(video_file, exercise_type: str, api_url: str = "http://localhost:8000") -> Dict[str, Any]:
     """
     Call the backend API endpoint /analyze-form-user-specified to analyze form
     """
@@ -27,9 +27,12 @@ def analyze_form_with_user_exercise(video_file, exercise_type: str) -> Dict[str,
             files = {'file': (video_file.name, f, video_file.type)}
             data = {'exercise_type': exercise_type}
             
+            # Construct the API URL
+            api_endpoint = f"{api_url}/analyze-form-user-specified"
+            
             # Make the API call to the backend
             response = requests.post(
-                "http://localhost:8000/analyze-form-user-specified",
+                api_endpoint,
                 files=files,
                 data=data
             )
@@ -40,7 +43,8 @@ def analyze_form_with_user_exercise(video_file, exercise_type: str) -> Dict[str,
                 st.error(f"API Error: {response.status_code} - {response.text}")
                 return None
     except requests.exceptions.ConnectionError:
-        st.error("Could not connect to the backend API. Please ensure the FastAPI server is running.")
+        st.error(f"Could not connect to the backend API at {api_url}. Please ensure the FastAPI server is running.")
+        st.info("If running with Docker, make sure the container is running and accessible.")
         return None
     except Exception as e:
         st.error(f"An error occurred: {str(e)}")
@@ -122,6 +126,20 @@ def main():
     with specific feedback and recommendations for improvement.
     """)
     
+    # API Configuration in sidebar
+    with st.sidebar:
+        st.header("🔧 API Configuration")
+        api_url = st.text_input("API URL", value="http://localhost:8000", 
+                               help="URL of the backend API server")
+        st.markdown("---")
+        st.info("### Docker Deployment Info")
+        st.markdown("""
+        - Run backend: `docker-compose up`
+        - API available at: `http://localhost:8000`
+        - Make sure model files are in the models/ directory
+        """)
+        st.markdown("---")
+    
     # Create two columns for layout
     col1, col2 = st.columns([1, 1])
     
@@ -160,8 +178,8 @@ def main():
     
     # Display processing message
     if analyze_button and video_file:
-        with st.spinner(f"Analyzing {exercise_type.replace('_', ' ')} form..."):
-            results = analyze_form_with_user_exercise(video_file, exercise_type)
+        with st.spinner(f"Analyzing {exercise_type.replace('_', ' ')} form from {api_url}..."):
+            results = analyze_form_with_user_exercise(video_file, exercise_type, api_url)
         
         if results:
             st.success("Analysis complete!")
