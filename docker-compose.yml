@@ -1,0 +1,22 @@
+services:
+  fitness-ai-api:
+    build:
+      dockerfile: ./backend/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount models from the root directory to the app directory in container
+      - ./models:/app/models
+      - ./final_forthesis_bidirectionallstm_and_encoders_exercise_classifier_model.h5:/app/final_forthesis_bidirectionallstm_and_encoders_exercise_classifier_model.h5
+      - ./thesis_bidirectionallstm_scaler.pkl:/app/thesis_bidirectionallstm_scaler.pkl
+      - ./thesis_bidirectionallstm_label_encoder.pkl:/app/thesis_bidirectionallstm_label_encoder.pkl
+      - ./temp:/app/temp
+
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+        reservations:
+          memory: 2G
+          cpus: '1'

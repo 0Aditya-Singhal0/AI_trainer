@@ -9,7 +9,7 @@ dependencies = [
     "mediapipe>=0.10.21",
     "opencv-python>=4.11.0.86",
     "pandas>=2.3.3",
-    "scikit-learn>=1.7.2",
+    "scikit-learn==1.5.0",
     "streamlit>=1.50.0",
     "tensorflow>=2.18.1",
     "tensorflow-io-gcs-filesystem==0.31.0",
